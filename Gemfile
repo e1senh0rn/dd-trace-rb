@@ -36,3 +36,6 @@ gem 'yard', '~> 0.9'
 # TODO: Move this to Appraisals?
 gem 'dogstatsd-ruby', '>= 3.3.0'
 gem 'opentracing', '>= 0.4.1'
+
+# For experimentation
+gem 'rack'
