@@ -20,7 +20,7 @@ module Datadog
     #
     # Every method that directly or indirectly accesses/mutates @components should be holding the lock (through
     # #safely_synchronize) while doing so.
-    COMPONENTS_LOCK = Mutex.new
+    COMPONENTS_LOCK = Monitor.new
     private_constant :COMPONENTS_LOCK
 
     attr_writer :configuration
