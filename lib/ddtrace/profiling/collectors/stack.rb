@@ -165,7 +165,8 @@ module Datadog
             # Re-use existing BacktraceLocation if identical copy, otherwise build a new one.
             recorder[Events::StackSample].cache(:backtrace_locations).fetch(
               # Function name
-              location.base_label,
+              #location.base_label,
+              "FIXME-WIP-TRUFFLERUBY",
               # Line number
               location.lineno,
               # Filename
