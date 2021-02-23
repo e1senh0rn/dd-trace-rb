@@ -4,8 +4,45 @@ module Datadog
   module Profiling
     module Ext
       # C-struct for retrieving clock ID from pthread
-      class CClockId < FFI::Struct
-        layout :value, :int
+      if RUBY_PLATFORM =~ /darwin/
+        MACOS_INTEGER_T = :int      # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/i386/vm_types.h#L93
+        MACOS_POLICY_T = :int       # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/policy.h#L79
+      
+        class StructTimeValue < FFI::Struct
+          layout(
+            seconds: MACOS_INTEGER_T,
+            microseconds: MACOS_INTEGER_T,
+          )
+        end
+      
+        class MachMsgTypeNumberT < FFI::Struct
+          layout(
+            fixme: :uint,
+          )
+        end
+      
+        MACOS_TIME_VALUE_T = StructTimeValue
+      
+        class StructThreadBasicInfo < FFI::Struct
+          # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_info.h#L92
+          layout(
+            user_time:     MACOS_TIME_VALUE_T,
+            system_time:   MACOS_TIME_VALUE_T,
+            cpu_usage:     MACOS_INTEGER_T,
+            policy:        MACOS_POLICY_T,
+            run_state:     MACOS_INTEGER_T,
+            flags:         MACOS_INTEGER_T,
+            suspend_count: MACOS_INTEGER_T,
+            sleep_time:    MACOS_INTEGER_T,
+          )
+        end
+
+        THREAD_BASIC_INFO = 3 # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_info.h#L90
+        THREAD_BASIC_INFO_COUNT = StructThreadBasicInfo.size / FFI::TypeDefs[:uint].size
+      elsif RUBY_PLATFORM =~ /linux/
+        class CClockId < FFI::Struct
+          layout :value, :int
+        end  
       end
 
       # Extension used to enable CPU-time profiling via use of Pthread's `getcpuclockid`.
@@ -13,7 +50,27 @@ module Datadog
         extend FFI::Library
         ffi_lib FFI::CURRENT_PROCESS
         attach_function :pthread_self, [], :ulong
-        attach_function :pthread_getcpuclockid, [:ulong, CClockId], :int
+        if RUBY_PLATFORM =~ /darwin/
+          attach_function(
+            :mach_thread_self, # http://web.mit.edu/darwin/src/modules/xnu/osfmk/man/mach_thread_self.html
+                               # https://github.com/apple/darwin-xnu/blob/8f02f2a044b9bb1ad951987ef5bab20ec9486310/libsyscall/mach/mach/mach_init.h#L73
+            [],                # no args
+            :uint,             # mach_port_t => __darwin_mach_port_t => __darwin_mach_port_name_t => __darwin_natural_t => unsigned int
+          )
+          attach_function(
+            :thread_info,      # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_act.defs#L241
+                               # https://developer.apple.com/documentation/kernel/1418630-thread_info
+            [
+              :uint,           # thread_inspect_it => mach_port_t => (see above)
+              :uint,           # thread_flavor_t => natural_t => __darwin_natural_t => (see above)
+              StructThreadBasicInfo.by_ref,
+              MachMsgTypeNumberT.by_ref,         # mach_msg_type_number_t *thread_info_outCnt
+            ],
+            :int,              # kern_return_t
+          )
+        elsif RUBY_PLATFORM =~ /linux/
+          attach_function :pthread_getcpuclockid, [:ulong, CClockId], :int
+        end
 
         def self.prepended(base)
           # Threads that have already been created, will not have resolved
@@ -33,7 +90,11 @@ module Datadog
         def initialize(*args)
           @pid = ::Process.pid
           @native_thread_id = nil
-          @clock_id = nil
+          if RUBY_PLATFORM =~ /darwin/
+            @thread_port = mach_thread_self()  # TODO: This needs to be released!
+          elsif RUBY_PLATFORM =~ /linux/
+            @clock_id = nil
+          end
 
           # Wrap the work block with our own
           # so we can retrieve the native thread ID within the thread's context.
@@ -53,10 +114,23 @@ module Datadog
           defined?(@clock_id) && @clock_id
         end
 
+        def thread_port
+          update_native_ids if forked?
+          defined?(@thread_port) && @thread_port
+        end
+        
         def cpu_time(unit = :float_second)
           return unless clock_id && ::Process.respond_to?(:clock_gettime)
           begin
-            ::Process.clock_gettime(clock_id, unit)
+            if RUBY_PLATFORM =~ /darwin/
+              thread_basic_info = StructThreadBasicInfo.new
+              thread_info_out_cnt = MachMsgTypeNumberT.new
+              thread_info_out_cnt[:fixme] = THREAD_BASIC_INFO_COUNT
+              thread_info_result = thread_info(thread_port, THREAD_BASIC_INFO, thread_basic_info, thread_info_out_cnt)
+              thread_basic_info[:cpu_usage]
+            elsif RUBY_PLATFORM =~ /linux/
+              ::Process.clock_gettime(clock_id, unit)
+            end
           rescue ::Errno::EINVAL
             puts "Failed to get clock_id for thread #{Thread.current} clock_id #{clock_id}"
             nil # ¯\_(ツ)_/¯
@@ -86,7 +160,11 @@ module Datadog
 
           @pid = ::Process.pid
           @native_thread_id = get_native_thread_id
-          @clock_id = get_clock_id(@native_thread_id)
+          if RUBY_PLATFORM =~ /darwin/
+            @thread_port = mach_thread_self()
+          elsif RUBY_PLATFORM =~ /linux/
+            @clock_id = get_clock_id(@native_thread_id)
+          end
         end
 
         def get_native_thread_id
