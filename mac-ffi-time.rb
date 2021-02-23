@@ -22,12 +22,28 @@ module MacStuff
       seconds: MACOS_INTEGER_T,
       microseconds: MACOS_INTEGER_T,
     )
+
+    def to_h
+      members.map { |member| [member, self[member]] }.to_h
+    end
+
+    def inspect
+      to_h.to_s
+    end
   end
 
   class MachMsgTypeNumberT < FFI::Struct
     layout(
       fixme: :uint,
     )
+
+    def to_h
+      members.map { |member| [member, self[member]] }.to_h
+    end
+
+    def inspect
+      to_h.to_s
+    end
   end
 
   MACOS_TIME_VALUE_T = StructTimeValue
@@ -44,6 +60,14 @@ module MacStuff
       suspend_count: MACOS_INTEGER_T,
       sleep_time:    MACOS_INTEGER_T,
     )
+
+    def to_h
+      members.map { |member| [member, self[member]] }.to_h
+    end
+
+    def inspect
+      to_h.to_s
+    end
   end
 
   attach_function(
@@ -65,15 +89,28 @@ module MacStuff
   )
 
   THREAD_BASIC_INFO = 3 # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_info.h#L90
+
+  THREAD_BASIC_INFO_COUNT = MacStuff::StructThreadBasicInfo.size / FFI::TypeDefs[:uint].size
 end
 
 current_thread_port = MacStuff.mach_thread_self
 
 thread_basic_info = MacStuff::StructThreadBasicInfo.new
+
 thread_info_out_cnt = MacStuff::MachMsgTypeNumberT.new
+thread_info_out_cnt[:fixme] = MacStuff::THREAD_BASIC_INFO_COUNT
 
-MacStuff.thread_info(current_thread_port, MacStuff::THREAD_BASIC_INFO, thread_basic_info, thread_info_out_cnt)
+start_time = Time.now
+finish_time = start_time + 5
 
-puts thread_basic_info.inspect
+rand while (Time.now < finish_time)
+
+thread_info_result = MacStuff.thread_info(current_thread_port, MacStuff::THREAD_BASIC_INFO, thread_basic_info, thread_info_out_cnt)
+
+if thread_info_result == 0
+  puts "Success!"
+else
+  puts "Call failed with error #{thread_info_result}" # see kern_return.h
+end
 
 binding.pry
