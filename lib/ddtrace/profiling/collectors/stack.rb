@@ -196,6 +196,7 @@ module Datadog
         # run update_native_ids"
         def warn_about_missing_cpu_time_instrumentation(thread)
           return if @warned_about_missing_cpu_time_instrumentation
+          return if thread.to_s.include?('reference-processor')
 
           # make sure we warn only once
           @warned_about_missing_cpu_time_instrumentation = true
