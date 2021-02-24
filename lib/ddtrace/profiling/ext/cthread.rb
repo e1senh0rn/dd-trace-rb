@@ -134,7 +134,11 @@ module Datadog
               thread_info_out_cnt[:fixme] = THREAD_EXTENDED_INFO_COUNT
               thread_info_result = thread_info(thread_port, THREAD_EXTENDED_INFO, thread_info, thread_info_out_cnt)
 
-              raise "Kernel call failed with error #{result}" unless thread_info_result.zero?
+              #raise "Kernel call failed with error #{thread_info_result}" unless thread_info_result.zero?
+              unless thread_info_result.zero?
+                puts "Kernel call failed with error #{thread_info_result}"
+                return
+              end
 
               thread_info[:pth_user_time] + thread_info[:pth_system_time]
             elsif RUBY_PLATFORM =~ /linux/
