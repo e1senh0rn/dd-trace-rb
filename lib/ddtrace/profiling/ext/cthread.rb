@@ -7,42 +7,44 @@ module Datadog
       if RUBY_PLATFORM =~ /darwin/
         MACOS_INTEGER_T = :int      # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/i386/vm_types.h#L93
         MACOS_POLICY_T = :int       # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/policy.h#L79
-      
-        class StructTimeValue < FFI::Struct
-          layout(
-            seconds: MACOS_INTEGER_T,
-            microseconds: MACOS_INTEGER_T,
-          )
-        end
-      
+
         class MachMsgTypeNumberT < FFI::Struct
           layout(
             fixme: :uint,
           )
         end
-      
-        MACOS_TIME_VALUE_T = StructTimeValue
-      
-        class StructThreadBasicInfo < FFI::Struct
-          # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_info.h#L92
+
+        class StructThreadExtendedInfo < FFI::Struct
           layout(
-            user_time:     MACOS_TIME_VALUE_T,
-            system_time:   MACOS_TIME_VALUE_T,
-            cpu_usage:     MACOS_INTEGER_T,
-            policy:        MACOS_POLICY_T,
-            run_state:     MACOS_INTEGER_T,
-            flags:         MACOS_INTEGER_T,
-            suspend_count: MACOS_INTEGER_T,
-            sleep_time:    MACOS_INTEGER_T,
+            pth_user_time: :uint64, # time in nanoseconds
+            pth_system_time: :uint64, # time in nanoseconds
+            pth_cpu_usage: :int32,
+            pth_policy: :int32,
+            pth_run_state: :int32,
+            pth_flags: :int32,
+            pth_sleep_time: :int32,
+            pth_curpri: :int32,
+            pth_priority: :int32,
+            pth_maxpriority: :int32,
+            pth_name: [:char, 64],
           )
+
+          def to_h
+            members.map { |member| [member, self[member]] }.to_h
+          end
+
+          def inspect
+            to_h.to_s
+          end
         end
 
-        THREAD_BASIC_INFO = 3 # https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/thread_info.h#L90
-        THREAD_BASIC_INFO_COUNT = StructThreadBasicInfo.size / FFI::TypeDefs[:uint].size
+        THREAD_EXTENDED_INFO = 5
+
+        THREAD_EXTENDED_INFO_COUNT = StructThreadExtendedInfo.size / FFI::TypeDefs[:uint].size
       elsif RUBY_PLATFORM =~ /linux/
         class CClockId < FFI::Struct
           layout :value, :int
-        end  
+        end
       end
 
       # Extension used to enable CPU-time profiling via use of Pthread's `getcpuclockid`.
@@ -63,7 +65,7 @@ module Datadog
             [
               :uint,           # thread_inspect_it => mach_port_t => (see above)
               :uint,           # thread_flavor_t => natural_t => __darwin_natural_t => (see above)
-              StructThreadBasicInfo.by_ref,
+              StructThreadExtendedInfo.by_ref,
               MachMsgTypeNumberT.by_ref,         # mach_msg_type_number_t *thread_info_outCnt
             ],
             :int,              # kern_return_t
@@ -90,11 +92,8 @@ module Datadog
         def initialize(*args)
           @pid = ::Process.pid
           @native_thread_id = nil
-          if RUBY_PLATFORM =~ /darwin/
-            @thread_port = mach_thread_self()  # TODO: This needs to be released!
-          elsif RUBY_PLATFORM =~ /linux/
-            @clock_id = nil
-          end
+          @thread_port = nil
+          @clock_id = nil
 
           # Wrap the work block with our own
           # so we can retrieve the native thread ID within the thread's context.
@@ -118,16 +117,26 @@ module Datadog
           update_native_ids if forked?
           defined?(@thread_port) && @thread_port
         end
-        
-        def cpu_time(unit = :float_second)
-          return unless clock_id && ::Process.respond_to?(:clock_gettime)
+
+        def cpu_time(unit = :float_second) # FIXME: CHANGE THIS DEFAULT TO NANOS
+          if RUBY_PLATFORM =~ /darwin/
+            return unless thread_port
+          else
+            return unless clock_id && ::Process.respond_to?(:clock_gettime)
+          end
+
+          raise "Only supports nanosecond" if unit != :nanosecond
+
           begin
             if RUBY_PLATFORM =~ /darwin/
-              thread_basic_info = StructThreadBasicInfo.new
+              thread_info = StructThreadExtendedInfo.new
               thread_info_out_cnt = MachMsgTypeNumberT.new
-              thread_info_out_cnt[:fixme] = THREAD_BASIC_INFO_COUNT
-              thread_info_result = thread_info(thread_port, THREAD_BASIC_INFO, thread_basic_info, thread_info_out_cnt)
-              thread_basic_info[:cpu_usage]
+              thread_info_out_cnt[:fixme] = THREAD_EXTENDED_INFO_COUNT
+              thread_info_result = thread_info(thread_port, THREAD_EXTENDED_INFO, thread_info, thread_info_out_cnt)
+
+              raise "Kernel call failed with error #{result}" unless thread_info_result.zero?
+
+              thread_info[:pth_user_time] + thread_info[:pth_system_time]
             elsif RUBY_PLATFORM =~ /linux/
               ::Process.clock_gettime(clock_id, unit)
             end
@@ -144,7 +153,11 @@ module Datadog
           #
           # Thus, we can use @clock_id as a canary to detect a thread that has missing instrumentation, because we
           # know that in initialize above we always set this variable to nil.
-          defined?(@clock_id) != nil
+          if RUBY_PLATFORM =~ /darwin/
+            defined?(@thread_port) != nil
+          else
+            defined?(@clock_id) != nil
+          end
         end
 
         private
@@ -162,6 +175,7 @@ module Datadog
           @native_thread_id = get_native_thread_id
           if RUBY_PLATFORM =~ /darwin/
             @thread_port = mach_thread_self()
+            #puts "Setting thread port for #{Thread.current} to #{@thread_port}"
           elsif RUBY_PLATFORM =~ /linux/
             @clock_id = get_clock_id(@native_thread_id)
           end
