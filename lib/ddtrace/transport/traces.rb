@@ -123,7 +123,9 @@ module Datadog
                 return send_traces(traces)
               end
             end
-          end.force
+          end
+
+          responses = responses.force if responses.respond_to?(:force) # WIP TRUFFLERUBY
 
           Datadog.health_metrics.transport_chunked(responses.size)
 

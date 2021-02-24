@@ -105,6 +105,8 @@ RSpec.describe Datadog::Transport::Traces::Chunker do
     context 'with a lazy enumerator' do
       let(:traces) { [].lazy }
 
+      before { skip 'WIP TRUFFLERUBY' if PlatformHelpers.truffleruby? }
+
       it 'does not force enumerator expansion' do
         expect(subject).to be_a(Enumerator::Lazy)
       end
