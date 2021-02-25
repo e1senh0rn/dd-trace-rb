@@ -44,18 +44,23 @@ RSpec.describe 'ActiveRecord multi-database implementation' do
       # Connect the Widget database
       klass.establish_connection(adapter: 'sqlite3', database: ':memory:')
 
+      table_needs_to_be_created = false
+
       begin
         klass.count
       rescue ActiveRecord::StatementInvalid
+        table_needs_to_be_created = true
+      end
+
+      if table_needs_to_be_created
         klass.connection.create_table 'widgets', force: :cascade do |t|
           t.string   'title'
           t.datetime 'created_at', null: false
           t.datetime 'updated_at', null: false
         end
-
-        # Prevent extraneous spans from showing up
-        klass.count
       end
+
+      klass.count
     end
   end
   let(:gadget_span) { spans[0] }
