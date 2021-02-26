@@ -1242,7 +1242,7 @@ elsif Gem::Version.new('2.7.0') <= Gem::Version.new(RUBY_VERSION) \
       gem 'excon'
       gem 'grape'
       gem 'graphql', '>= 1.12.0'
-      gem 'grpc'
+      gem 'grpc' unless RUBY_ENGINE == 'truffleruby'
       gem 'hiredis'
       gem 'http'
       gem 'httpclient'
